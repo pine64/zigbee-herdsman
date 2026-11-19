@@ -211,6 +211,16 @@ export const FRAMES: {[key: string]: BLZFrameDesc} = {
             payloadLimit: uint8_t,
         },
     },
+    changeChannel: {
+        ID: 0x0039,
+        request: {
+            channel: uint8_t,
+            nwkUpdateId: uint8_t,
+        },
+        response: {
+            status: BlzStatus,
+        },
+    },
     nwkStatusCallback: {
         ID: 0x0038,
         request: {}, // No request data

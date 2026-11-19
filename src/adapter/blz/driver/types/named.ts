@@ -97,6 +97,10 @@ export class BlzStatus extends basic.uint8_t {
     static SUCCESS = 0x00;
     // TODO: General error.
     static GENERAL_ERROR = 0x01;
+    // BLZ_ERROR_* in the NCP's blz.h
+    static ERROR_FAIL = 0x30;
+    static UNSUPPORTED_FRAME = 0x31;
+    static INVALID_VALUE = 0x33;
 }
 
 export class BlzNodeType extends basic.uint8_t {

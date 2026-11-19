@@ -32,6 +32,8 @@ describe("BLZ Adapter", () => {
             isInitialized: ReturnType<typeof vi.fn>;
             leaveNetwork: ReturnType<typeof vi.fn>;
             formNetwork: ReturnType<typeof vi.fn>;
+            changeChannel: ReturnType<typeof vi.fn>;
+            getNetworkParameters: ReturnType<typeof vi.fn>;
             version: {product: number};
         };
         backupMan: {
@@ -85,6 +87,8 @@ describe("BLZ Adapter", () => {
                 isInitialized: vi.fn(),
                 leaveNetwork: vi.fn(),
                 formNetwork: vi.fn(),
+                changeChannel: vi.fn(),
+                getNetworkParameters: vi.fn(),
                 version: {product: 1},
             },
             backupMan: {
@@ -172,6 +176,7 @@ describe("BLZ Adapter", () => {
                 linkKey: Buffer.alloc(16),
                 outgoingFrameCounter: 0,
             });
+            driverMock.blz.changeChannel.mockResolvedValue(BlzStatus.UNSUPPORTED_FRAME);
             driverMock.blz.leaveNetwork.mockResolvedValue(BlzStatus.SUCCESS);
             driverMock.blz.formNetwork.mockResolvedValue(BlzStatus.SUCCESS);
             driverMock.setNetworkKeyInfo.mockResolvedValue(BlzStatus.SUCCESS);
@@ -192,6 +197,80 @@ describe("BLZ Adapter", () => {
                 Buffer.from("0900800000fe01ffff", "hex"),
             );
             expect(driverMock.blz.formNetwork).toHaveBeenCalledWith(BigInt("0xb3c6675b7437d674"), 0x2ea0, 15);
+        });
+
+        describe("channel change", () => {
+            const startChange = () => {
+                driverMock.networkParams.Channel = 11;
+                driverMock.networkParams.nwkUpdateId = 4;
+                driverMock.makeApsFrame.mockReturnValue({
+                    sequence: 9,
+                    profileId: Zdo.ZDO_PROFILE_ID,
+                    clusterId: Zdo.ClusterId.NWK_UPDATE_REQUEST,
+                    sourceEndpoint: 0,
+                    destinationEndpoint: 0,
+                });
+                driverMock.brequest.mockResolvedValue(true);
+                driverMock.getNetworkKeyInfo.mockResolvedValue({nwkKey: Buffer.alloc(16), outgoingFrameCounter: 1, nwkKeySeqNum: 0});
+                driverMock.getGlobalTcLinkKey.mockResolvedValue({linkKey: Buffer.alloc(16), outgoingFrameCounter: 0});
+                driverMock.blz.leaveNetwork.mockResolvedValue(BlzStatus.SUCCESS);
+                driverMock.blz.formNetwork.mockResolvedValue(BlzStatus.SUCCESS);
+                const payload = Zdo.Buffalo.buildRequest(true, Zdo.ClusterId.NWK_UPDATE_REQUEST, [20], 0xfe, undefined, 5, undefined);
+                return adapter.sendZdo(ZSpec.BLANK_EUI64, ZSpec.BroadcastAddress.SLEEPY, Zdo.ClusterId.NWK_UPDATE_REQUEST, payload, true);
+            };
+
+            it("moves the coordinator in place when the firmware has CHANGE_CHANNEL", async () => {
+                // probe for channel 0 is rejected as an invalid value, the real move succeeds
+                driverMock.blz.changeChannel.mockResolvedValueOnce(BlzStatus.INVALID_VALUE).mockResolvedValueOnce(BlzStatus.SUCCESS);
+                driverMock.blz.getNetworkParameters
+                    .mockResolvedValueOnce({status: 0, channel: 11, nwkUpdateId: 4})
+                    .mockResolvedValueOnce({status: 0, channel: 20, nwkUpdateId: 5});
+
+                const change = startChange();
+                await vi.advanceTimersByTimeAsync(5000);
+                await change;
+
+                expect(driverMock.blz.changeChannel).toHaveBeenNthCalledWith(1, 0, 4);
+                expect(driverMock.blz.changeChannel).toHaveBeenNthCalledWith(2, 20, 5);
+                expect(driverMock.blz.leaveNetwork).not.toHaveBeenCalled();
+                expect(driverMock.blz.formNetwork).not.toHaveBeenCalled();
+                expect(driverMock.networkParams.Channel).toStrictEqual(20);
+                expect(driverMock.networkParams.nwkUpdateId).toStrictEqual(5);
+            });
+
+            it("leaves and re-forms when the firmware answers UNSUPPORTED_FRAME", async () => {
+                driverMock.blz.changeChannel.mockResolvedValue(BlzStatus.UNSUPPORTED_FRAME);
+
+                const change = startChange();
+                await vi.advanceTimersByTimeAsync(30000);
+                await change;
+
+                expect(driverMock.blz.changeChannel).toHaveBeenCalledTimes(1);
+                expect(driverMock.blz.leaveNetwork).toHaveBeenCalledTimes(1);
+                expect(driverMock.blz.formNetwork).toHaveBeenCalledWith(expect.anything(), 0x1234, 20);
+                expect(driverMock.networkParams.Channel).toStrictEqual(20);
+            });
+
+            it("leaves and re-forms when the probe gets no answer", async () => {
+                driverMock.blz.changeChannel.mockRejectedValue(new Error("Failure send changeChannel"));
+
+                const change = startChange();
+                await vi.advanceTimersByTimeAsync(30000);
+                await change;
+
+                expect(driverMock.blz.formNetwork).toHaveBeenCalledWith(expect.anything(), 0x1234, 20);
+            });
+
+            it("fails when the NCP does not reach the new channel", async () => {
+                driverMock.blz.changeChannel.mockResolvedValueOnce(BlzStatus.INVALID_VALUE).mockResolvedValueOnce(BlzStatus.SUCCESS);
+                driverMock.blz.getNetworkParameters.mockResolvedValue({status: 0, channel: 11, nwkUpdateId: 4});
+
+                const change = startChange();
+                const outcome = expect(change).rejects.toThrow("NCP is not on channel 20 after 15 s");
+                await vi.advanceTimersByTimeAsync(20000);
+                await outcome;
+                expect(driverMock.blz.formNetwork).not.toHaveBeenCalled();
+            });
         });
     });
 

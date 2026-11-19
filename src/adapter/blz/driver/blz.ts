@@ -462,6 +462,21 @@ export class Blz extends EventEmitter {
         return result.status;
     }
 
+    /**
+     * Move the coordinator to another channel and set its nwkUpdateId (firmware with CHANGE_CHANNEL only).
+     * Returns the NCP status; older firmware answers UNSUPPORTED_FRAME.
+     */
+    async changeChannel(channel: number, nwkUpdateId: number): Promise<number> {
+        const result = await this.execCommand("changeChannel", {channel, nwkUpdateId});
+        logger.debug(`Change channel result: ${JSON.stringify(result)}`, NS);
+        return result.status;
+    }
+
+    /** The NCP's current network parameters (channel, nwkUpdateId, ...), read live. */
+    async getNetworkParameters(): Promise<BLZFrameData> {
+        return await this.execCommand("getNetworkParameters");
+    }
+
     async setValue(valueId: t.BlzValueId, value: number | Buffer): Promise<BLZFrameData> {
         const valueName = t.BlzValueId.valueToName(t.BlzValueId, valueId);
         logger.debug(`Set ${valueName} = ${value}`, NS);

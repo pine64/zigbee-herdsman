@@ -16,6 +16,10 @@ import {type BlzIncomingMessage, Driver} from "../driver";
 import {BlzEUI64, BlzStatus} from "../driver/types";
 
 const NS = "zh:blz";
+// Never a valid channel: firmware with CHANGE_CHANNEL leaves its channel alone, older firmware answers UNSUPPORTED_FRAME.
+const CHANNEL_CHANGE_PROBE = 0;
+const CHANNEL_CHANGE_TIMEOUT_MS = 15000;
+const CHANNEL_CHANGE_POLL_MS = 1000;
 /** BLZ NCP UART rate, used when the configuration does not set one */
 const DEFAULT_BAUDRATE = 2000000;
 
@@ -476,8 +480,49 @@ export class BLZAdapter extends Adapter {
     }
 
     /**
-     * Handle channel change for BLZ adapter
-     * Since BLZ doesn't support runtime channel change, we:
+     * Firmware with CHANGE_CHANNEL (0x0039) answers a probe for channel 0 with an error other than
+     * UNSUPPORTED_FRAME and stays where it is. Older firmware answers UNSUPPORTED_FRAME (or nothing).
+     */
+    private async supportsInPlaceChannelChange(): Promise<boolean> {
+        try {
+            const status = await this.driver.blz.changeChannel(CHANNEL_CHANGE_PROBE, this.driver.networkParams.nwkUpdateId);
+            return status !== BlzStatus.UNSUPPORTED_FRAME;
+        } catch (error) {
+            logger.warning(`[BLZ] CHANGE_CHANNEL probe failed (${(error as Error).message}); using leave and re-form`, NS);
+            return false;
+        }
+    }
+
+    /**
+     * Move the coordinator in place with CHANGE_CHANNEL, then wait until the NCP reports the new channel.
+     * The devices follow the NWK_UPDATE_REQUEST broadcast that was just sent; the network is not re-formed.
+     */
+    private async changeChannelInPlace(newChannel: number, nwkUpdateId: number): Promise<void> {
+        logger.info(`[BLZ] Moving the coordinator to channel ${newChannel} in place (CHANGE_CHANNEL)`, NS);
+        const status = await this.driver.blz.changeChannel(newChannel, nwkUpdateId);
+        if (status !== BlzStatus.SUCCESS) {
+            throw new Error(`[BLZ] NCP did not change channel: status=${status}`);
+        }
+
+        const deadline = Date.now() + CHANNEL_CHANGE_TIMEOUT_MS;
+        for (;;) {
+            const params = await this.driver.blz.getNetworkParameters();
+            if (params.channel === newChannel) {
+                this.driver.networkParams.Channel = newChannel;
+                this.driver.networkParams.nwkUpdateId = params.nwkUpdateId;
+                logger.info(`[BLZ] Channel change completed in place: channel ${newChannel}, nwkUpdateId ${params.nwkUpdateId}`, NS);
+                return;
+            }
+            if (Date.now() >= deadline) {
+                throw new Error(`[BLZ] NCP is not on channel ${newChannel} after ${CHANNEL_CHANGE_TIMEOUT_MS / 1000} s`);
+            }
+            await wait(CHANNEL_CHANGE_POLL_MS);
+        }
+    }
+
+    /**
+     * Handle channel change for BLZ adapter.
+     * Firmware with CHANGE_CHANNEL moves the coordinator in place. Older firmware cannot, so we:
      * 1. Wait for broadcast to propagate
      * 2. Leave the network
      * 3. Reform on the new channel
@@ -490,6 +535,12 @@ export class BLZAdapter extends Adapter {
         if (nwkUpdateId <= currentParams.nwkUpdateID) {
             throw new Error(`Invalid NWKUpdateID ${nwkUpdateId} - must be greater than current ${currentParams.nwkUpdateID}`);
         }
+
+        if (await this.supportsInPlaceChannelChange()) {
+            await this.changeChannelInPlace(newChannel, nwkUpdateId);
+            return;
+        }
+        logger.info("[BLZ] NCP firmware has no CHANGE_CHANNEL; leaving and re-forming on the new channel", NS);
 
         logger.debug("[BLZ] Current network parameters:", NS);
         logger.debug(`[BLZ]   - PanID: 0x${currentParams.panID.toString(16)}`, NS);
