@@ -20,6 +20,10 @@ const NS = "zh:blz";
 const CHANNEL_CHANGE_PROBE = 0;
 const CHANNEL_CHANGE_TIMEOUT_MS = 15000;
 const CHANNEL_CHANGE_POLL_MS = 1000;
+// Time the NWK_UPDATE_REQUEST broadcast needs to reach every node before the coordinator leaves the channel.
+// Parents hold broadcasts for sleepy children until their next poll, so moving at once strands them.
+// Matches nwkNetworkBroadcastDeliveryTime (about 9 s) plus a margin; the firmware moves immediately.
+const CHANNEL_CHANGE_DELIVERY_MS = 10000;
 /** BLZ NCP UART rate, used when the configuration does not set one */
 const DEFAULT_BAUDRATE = 2000000;
 
@@ -498,6 +502,8 @@ export class BLZAdapter extends Adapter {
      * The devices follow the NWK_UPDATE_REQUEST broadcast that was just sent; the network is not re-formed.
      */
     private async changeChannelInPlace(newChannel: number, nwkUpdateId: number): Promise<void> {
+        logger.info(`[BLZ] Waiting ${CHANNEL_CHANGE_DELIVERY_MS / 1000} s for the channel change broadcast to reach all devices`, NS);
+        await wait(CHANNEL_CHANGE_DELIVERY_MS);
         logger.info(`[BLZ] Moving the coordinator to channel ${newChannel} in place (CHANGE_CHANNEL)`, NS);
         const status = await this.driver.blz.changeChannel(newChannel, nwkUpdateId);
         if (status !== BlzStatus.SUCCESS) {

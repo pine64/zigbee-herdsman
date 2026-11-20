@@ -227,7 +227,10 @@ describe("BLZ Adapter", () => {
                     .mockResolvedValueOnce({status: 0, channel: 20, nwkUpdateId: 5});
 
                 const change = startChange();
-                await vi.advanceTimersByTimeAsync(5000);
+                // the coordinator stays on the old channel while the broadcast is delivered
+                await vi.advanceTimersByTimeAsync(9000);
+                expect(driverMock.blz.changeChannel).toHaveBeenCalledTimes(1);
+                await vi.advanceTimersByTimeAsync(6000);
                 await change;
 
                 expect(driverMock.blz.changeChannel).toHaveBeenNthCalledWith(1, 0, 4);
@@ -267,7 +270,7 @@ describe("BLZ Adapter", () => {
 
                 const change = startChange();
                 const outcome = expect(change).rejects.toThrow("NCP is not on channel 20 after 15 s");
-                await vi.advanceTimersByTimeAsync(20000);
+                await vi.advanceTimersByTimeAsync(30000);
                 await outcome;
                 expect(driverMock.blz.formNetwork).not.toHaveBeenCalled();
             });
